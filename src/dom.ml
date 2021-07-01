@@ -13,7 +13,7 @@ module type Lattice = sig
 end
 
 
-(** Abstract domains of elements of type ['a] *)
+(** Module type for arbitrary abstract domains *)
 module type Dom = sig
 
   include Lattice
@@ -39,6 +39,7 @@ module type Dom = sig
   val to_string : t -> string
 end
 
+(** Integer domains *)
 module type IntDom = sig
   include Dom
   

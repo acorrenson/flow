@@ -3,28 +3,7 @@
 open Flow_lib
 open Dom
 open Mem
-
-(** {2 Language definition }  *)
-
-
-type expr =
-  | Cst of int
-  | Var of string
-  | Add of expr * expr
-  | Sub of expr * expr
-
-type cond =
-  | Bool of bool
-  | Eq of expr * expr
-  | Le of expr * expr
-
-type imp =
-  | Assign of string * expr
-  | If of cond * imp list * imp list
-  | While of cond * imp list
-
-type prog = imp list
-
+open Lang
 
 (** {2 a simple integer interval domain } *)
 module IntInterval : Dom.IntDom = struct
@@ -136,22 +115,78 @@ module Analyzer (D : IntDom) = struct
       assume_eval (assume_eval s dy y) dx x
     | _ -> s
 
-  let rec run (s : ST.t) (p : prog) =
-    List.fold_left step s p
-  and step (s : ST.t) (x : imp) =
-    match x with
-    | Assign (x, e) -> ST.set s x (eval s e)
-    | If (c, br1, br2) ->
-      ST.join (run (assume_test s true c) br1) (run (assume_test s false c) br2)
-    | While (_, p) -> P.compute (fun x -> ST.join s (run x p))
+  type table = (Pp.t * ST.t) list
+
+  let reassoc m x v = (x, v)::List.remove_assoc x m
+
+  let run (s : ST.t) (p : prog) =
+    let tbl = ref [] in
+    let bind pp s = tbl := reassoc !tbl pp s; s in
+    let rec run_list (s : ST.t) (p : prog) =
+      List.fold_left run_step s p
+    and run_step (s : ST.t) (x : imp) =
+      match x with
+      | Assign (pp, x, e) ->
+        bind pp @@ ST.set s x (eval s e)
+      | If (pp, c, br1, br2) ->
+        let s1 = run_list (assume_test s true c) br1 in
+        let s2 = run_list (assume_test s false c) br2 in
+        bind pp @@ ST.join s1 s2
+      | While (pp, c, p) ->
+        let fix x =
+          let s' = assume_test x true c in
+          ST.join s (run_list s' p)
+        in
+        bind pp @@ assume_test (P.compute fix) false c
+    in
+    !tbl, run_list s p
+
+    let rec pp_expr fmt = function
+      | Cst i -> Format.pp_print_int fmt i
+      | Var x -> Format.pp_print_string fmt x
+      | Add (e1, e2) ->
+          Format.fprintf fmt "@[(%a + %a)@]" pp_expr e1 pp_expr e2
+      | Sub (e1, e2) ->
+        Format.fprintf fmt "@[(%a + %a)@]" pp_expr e1 pp_expr e2
+      
+    let pp_cond fmt = function
+        | Bool b -> Format.pp_print_bool fmt b
+        | Eq (e1, e2) ->
+          Format.fprintf fmt "@[%a == %a@]" pp_expr e1 pp_expr e2
+        | Le (e1, e2) ->
+          Format.fprintf fmt "@[%a <= %a@]" pp_expr e1 pp_expr e2
+    
+    let rec pp_instr tbl fmt = function
+      | Assign (_pp, x, e) ->
+        Format.fprintf fmt "%s := %a" x pp_expr e
+      | If (pp, c, br1, br2) ->
+        Format.fprintf fmt "@[<v 2>if(%a) {@,%a@]@,@[<v 2>} else {@,%a@]@,}@,\x1b[31m%a\x1b[0m"
+          pp_cond c (pp_prog tbl) br1 (pp_prog tbl) br2 ST.pp_print (List.assoc pp tbl)
+      | _ -> ()
+
+    and pp_prog tbl fmt = function
+      | [] -> ()
+      | [x] -> (pp_instr tbl) fmt x
+      | x::xs -> Format.fprintf fmt "%a;@,%a" (pp_instr tbl) x (pp_prog tbl) xs
+
+    let print_analysis p is (tbl, _s) =
+      Format.printf "\x1b[31m%a\x1b[0m" ST.pp_print is;
+      Format.printf "@.@[<v>%a@]@." (pp_prog tbl) p
 end
 
 let test = [
-  If (Le (Var "x", Cst 10), 
-          [If (Eq (Var "x", Cst 11), [Assign ("z", Cst 1)], [Assign ("z", Cst 2)])],
-          [Assign ("z", Cst 3)]);
+  If (Pp.new_pp (), Le (Var "x", Cst 10), 
+      [
+        If (Pp.new_pp (), Eq (Var "x", Cst 11),
+          [Assign (Pp.new_pp (), "z", Cst 1)], 
+          [Assign (Pp.new_pp (), "z", Cst 2)])
+      ],
+      [Assign (Pp.new_pp (), "z", Cst 3)]);
 ]
 
 module A = Analyzer(IntInterval)
 
-let () = A.run A.ST.top test |> A.ST.print
+let watch = A.ST.watch_vars ["x"; "z"]
+
+let () = A.run watch test |> A.print_analysis test watch
+

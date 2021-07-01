@@ -1,15 +1,28 @@
+(** {2 Abstract memory } *)
+
 open Dom
 
+(** Abstract memory over [D.t] domains *)
 module MemoryDom (D : Dom) : sig
   include SemiLattice
   val set : t -> string -> D.t -> t
+  (** [set mem x d] sets the abstract value of the variable [x] to 
+    the domain [d] in the abstract memory [mem] *)
+  
   val get : t -> string -> D.t
-  val print : t -> unit
+  (** [get mem x] returns the abstract value of the variable [x] in
+    the abstract memory [mem] *)
+  
+  val pp_print : Format.formatter -> t -> unit
+
+  val watch_vars : string list -> t
 end = struct
   
   type t =
     | Bot
     | Top_but of (string * D.t) list
+
+  let watch_vars l = Top_but (List.map (fun x -> x, D.top) l)
 
   let set (s : t) (x : string) (d : D.t) =
     match s with
@@ -48,11 +61,16 @@ end = struct
     | Top_but _, Top_but s ->
       List.for_all (fun (x, d) -> D.le (get s2 x) d) s
 
-  let print (s : t) =
+  let rec pp_doms (fmt : Format.formatter) (l : (string * D.t) list) =
+    match l with
+    | [] -> ()
+    | [x, d] -> Format.fprintf fmt "#%s := %s" x (D.to_string d)
+    | (x, d)::xs -> Format.fprintf fmt "#%s := %s, @,%a" x (D.to_string d) pp_doms xs
+
+
+  let pp_print (fmt : Format.formatter) (s : t) =
     match s with
-    | Bot -> Printf.printf "'invalid state'"
-    | Top_but s ->
-      List.iter (fun (x, d) ->
-        Printf.printf "#%s = %s\n" (D.to_string d) x) s
-  
+    | Bot -> Format.fprintf fmt "'invalid state'"
+    | Top_but s -> Format.fprintf fmt "%a" pp_doms s
+
 end

@@ -1,2 +1,3 @@
 # flow
-An abstract interpreter
+
+An abstract interpreter for fun

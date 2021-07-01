@@ -1,8 +1,10 @@
 (library
  (name flow_lib)
+ (public_name flow.flow_lib)
  (modules :standard \ flow))
 
 (executable
  (name flow)
+ (public_name flow)
  (modules flow)
  (libraries flow_lib))
