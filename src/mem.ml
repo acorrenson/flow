@@ -59,7 +59,7 @@ end = struct
     | Bot, _ -> true
     | _, Bot -> false
     | Top_but _, Top_but s ->
-      List.for_all (fun (x, d) -> D.le (get s2 x) d) s
+      List.for_all (fun (x, d) -> D.le (get s1 x) d) s
 
   let rec pp_doms (fmt : Format.formatter) (l : (string * D.t) list) =
     match l with

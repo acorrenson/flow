@@ -10,7 +10,7 @@ module IntInterval : Dom.IntDom = struct
 
   type t = (int * int) option
 
-  let is_in x = function 
+  let is_in x = function
     | Some (a, b) -> a <= x && x <= b
     | None -> false
 
@@ -38,7 +38,7 @@ module IntInterval : Dom.IntDom = struct
 
   let const n = Some (n, n)
 
-  let add i1 i2 = 
+  let add i1 i2 =
     match i1, i2 with
     | None, _ | _, None -> None
     | Some (a, b), Some (c, d) ->
@@ -57,14 +57,18 @@ module IntInterval : Dom.IntDom = struct
     match i1, i2 with
     | None, _ | _, None -> bot, bot
     | Some (a, b), Some (a', b') ->
-      if a > b' then bot, bot
-      else Some (a, min b b'), Some (min a a', b')
+      Some (a, min b b'), Some (min a a', b')
 
-
-  let eq_inv i1 i2 =
+  let gt_inv i1 i2 =
     match i1, i2 with
     | None, _ | _, None -> bot, bot
-    | Some _, Some _ -> (meet i1 i2, meet i1 i2)
+    | Some (a, b), Some (a', b') ->
+      Some (max (a' + 1) a, b), Some (a', min b' (b - 1))
+
+  let eq_inv i1 i2 = (meet i1 i2, meet i1 i2)
+
+
+  let ne_inv i1 i2 = (i1, i2)
 
 
   let to_string i =
@@ -78,6 +82,7 @@ module IntInterval : Dom.IntDom = struct
       in
       "[" ^ (str a) ^ ", " ^ (str b) ^ "]"
 
+  let pp_print fmt i = Format.fprintf fmt "%s" (to_string i)
 end
 
 
@@ -107,17 +112,26 @@ module Analyzer (D : IntDom) = struct
   let assume_test (s : ST.t) (b : bool) (c : cond) =
     match c with
     | Bool b' -> if b = b' then s else ST.bot
-    | Eq (x, y) when b ->
-      let (dx, dy) = D.eq_inv (eval s x) (eval s y) in
+    | Eq (x, y) ->
+      let (dx, dy) =
+        if b then D.eq_inv (eval s x) (eval s y)
+        else D.ne_inv (eval s x) (eval s y)
+      in
       assume_eval (assume_eval s dy y) dx x
-    | Le (x, y) when b ->
-      let (dx, dy) = D.le_inv (eval s x) (eval s y) in
+    | Le (x, y) ->
+      let (dx, dy) = 
+        if b then D.le_inv (eval s x) (eval s y)
+        else
+          let e = D.gt_inv (eval s x) (eval s y) in
+          D.pp_print Format.std_formatter (fst e); 
+          D.pp_print Format.std_formatter (snd e);
+          e
+      in
       assume_eval (assume_eval s dy y) dx x
-    | _ -> s
 
   type table = (Pp.t * ST.t) list
 
-  let reassoc m x v = (x, v)::List.remove_assoc x m
+  let reassoc m x v = (x, v)::List.remove_assoc x m  
 
   let run (s : ST.t) (p : prog) =
     let tbl = ref [] in
@@ -134,8 +148,8 @@ module Analyzer (D : IntDom) = struct
         bind pp @@ ST.join s1 s2
       | While (pp, c, p) ->
         let fix x =
-          let s' = assume_test x true c in
-          ST.join s (run_list s' p)
+          let x' = assume_test x true c in
+          ST.join s (run_list x' p)
         in
         bind pp @@ assume_test (P.compute fix) false c
     in
@@ -162,7 +176,10 @@ module Analyzer (D : IntDom) = struct
       | If (pp, c, br1, br2) ->
         Format.fprintf fmt "@[<v 2>if(%a) {@,%a@]@,@[<v 2>} else {@,%a@]@,}@,\x1b[31m%a\x1b[0m"
           pp_cond c (pp_prog tbl) br1 (pp_prog tbl) br2 ST.pp_print (List.assoc pp tbl)
-      | _ -> ()
+      | While (pp, c, br) ->
+        Format.fprintf fmt "@[<v 2>while(%a) {@,%a@]@,}\x1b[31m%a\x1b[0m"
+        pp_cond c (pp_prog tbl) br ST.pp_print (List.assoc pp tbl)
+
 
     and pp_prog tbl fmt = function
       | [] -> ()
@@ -184,9 +201,20 @@ let test = [
       [Assign (Pp.new_pp (), "z", Cst 3)]);
 ]
 
+let test2 = [
+  If (Pp.new_pp (),
+    Eq (Cst 0, Var "x"),
+    [While (Pp.new_pp (), Le (Var "x", Cst 5), [Assign (Pp.new_pp (), "x", Add (Var "x", Cst 1))])],
+    []
+  )
+]
+
 module A = Analyzer(IntInterval)
 
-let watch = A.ST.watch_vars ["x"; "z"]
+(* let watch = A.ST.watch_vars ["x"; "z"] *)
 
-let () = A.run watch test |> A.print_analysis test watch
+(* let () = A.run watch test |> A.print_analysis test watch *)
 
+let watch = A.ST.watch_vars ["x"]
+
+let () = A.run watch test2 |> A.print_analysis test2 watch

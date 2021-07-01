@@ -5,6 +5,8 @@ module type SemiLattice = sig
   val bot : t
   val top : t
   val le : t -> t -> bool
+
+  val pp_print : Format.formatter -> t -> unit
 end
 
 module type Lattice = sig
@@ -27,13 +29,20 @@ module type Dom = sig
   val add_inv : t -> t -> t -> t * t
   (** backward addition *)
 
+
   val sub_inv : t -> t -> t -> t * t
   (** backward subtraction *)
 
   val eq_inv : t -> t -> t * t
   (** refinement of domains assuming equality *)
 
+  val ne_inv : t -> t -> t * t
+  (** refinement of domains assuming no equality *)
+
   val le_inv : t -> t -> t * t
+  (** refinement of domains assuming ordering *)
+
+  val gt_inv : t -> t -> t * t
   (** refinement of domains assuming ordering *)
 
   val to_string : t -> string
