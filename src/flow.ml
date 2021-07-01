@@ -1,10 +1,11 @@
 (** A tinny abstract interpreter for fun ! *)
 
+open Flow_lib
+open Dom
+open Mem
+
 (** {2 Language definition }  *)
 
-module Imp = struct
-
-module Var = Set.Make (String)
 
 type expr =
   | Cst of int
@@ -24,178 +25,87 @@ type imp =
 
 type prog = imp list
 
-end
-
-(** {2 Signature of abstract domains *)
-
-module type IntegerDom = sig
-  type t
-  val add : t -> t -> t
-  val sub : t -> t -> t
-  val is_in : int -> t -> bool
-  val incl : t -> t -> bool
-  val join : t -> t -> t
-  val meet : t -> t -> t
-  val top : t
-  val bot : t
-  val const : int -> t
-  val to_string : t -> string
-end
-
-module type StoreDom = sig
-  module D : IntegerDom
-  type t
-  val set : t -> string -> D.t -> t
-  val get : t -> string -> D.t
-  val join : t -> t -> t
-  val incl : t -> t -> bool
-  val top : t
-  val bot : t
-  val print : t -> unit
-end
-
-module AStore (D : IntegerDom) : StoreDom with module D = D = struct
-  module D = D
-  type t =
-    | Bot
-    | Top_but of (string * D.t) list
-
-  let set (s : t) (x : string) (d : D.t) =
-    match s with
-    | Bot -> Bot
-    | Top_but s -> Top_but ((x, d)::List.remove_assoc x s)
-
-  let get (s : t) (x : string) =
-    match s with
-    | Bot -> D.bot
-    | Top_but s ->
-      match List.assoc_opt x s with
-      | Some d -> d
-      | None -> D.top
-
-  let bot = Bot
-
-  let top = Top_but []
-
-  module VSet = Set.Make(String)
-
-  let vars l = List.fold_left (fun v (x, _) -> VSet.add x v) VSet.empty l
-
-  let join (s1 : t) (s2 : t) =
-    match s1, s2 with
-    | Bot, _ -> s2
-    | _, Bot -> s1
-    | Top_but s1', Top_but s2' ->
-      let vs = VSet.union (vars s1') (vars s2') in
-      Top_but (VSet.fold (fun x m -> (x, D.join (get s1 x) (get s2 x))::m) vs [])
-
-  let incl (s1 : t) (s2 : t) =
-    match s1, s2 with
-    | Bot, _ -> true
-    | _, Bot -> false
-    | Top_but _, Top_but s ->
-      List.for_all (fun (x, d) -> D.incl (get s2 x) d) s
-
-  let print (s : t) =
-    match s with
-    | Bot -> Printf.printf "'invalid state'"
-    | Top_but s ->
-      List.iter (fun (x, d) ->
-        Printf.printf "#%s = %s\n" (D.to_string d) x
-      ) s
-
-end
 
 (** {2 a simple integer interval domain } *)
+module IntInterval : Dom.IntDom = struct
 
-module IntInterval : IntegerDom = struct
+  type t = (int * int) option
 
-type t = (int * int) option
+  let is_in x = function 
+    | Some (a, b) -> a <= x && x <= b
+    | None -> false
 
-let is_in x = function 
-  | Some (a, b) -> a <= x && x <= b
-  | None -> false
+  let le i1 i2 =
+    match i1, i2 with
+    | None, _ -> true
+    | _, None -> false
+    | Some (a, b), Some (c, d) -> c <= a && b <= d
 
-let add i1 i2 = 
-  match i1, i2 with
-  | None, _ | _, None -> None
-  | Some (a, b), Some (c, d) ->
-    Some (a + c, b + d)
+  let join i1 i2 =
+    match i1, i2 with
+    | None, _ -> i2
+    | _, None -> i1
+    | Some (a, b), Some (c, d) -> Some (min a c, max b d)
 
-let sub i1 i2 =
-  match i1, i2 with
-  | None, _ | _, None -> None
-  | Some (a, b), Some (c, d) -> Some (a - d, b - c)
+  let meet i1 i2 =
+    match i1, i2 with
+    | None, _ -> None
+    | _, None -> None
+    | Some (a, b), Some (c, d) -> Some (max a c, min b d)
 
-let incl i1 i2 =
-  match i1, i2 with
-  | None, _ -> true
-  | _, None -> false
-  | Some (a, b), Some (c, d) -> c <= a && b <= d
+  let top = Some (min_int, max_int)
 
-let join i1 i2 =
-  match i1, i2 with
-  | None, _ -> i2
-  | _, None -> i1
-  | Some (a, b), Some (c, d) -> Some (min a c, max b d)
+  let bot = None
 
-let meet i1 i2 =
-  match i1, i2 with
-  | None, _ -> None
-  | _, None -> None
-  | Some (a, b), Some (c, d) -> Some (max a c, min b d)
+  let const n = Some (n, n)
 
-let top = Some (min_int, max_int)
+  let add i1 i2 = 
+    match i1, i2 with
+    | None, _ | _, None -> None
+    | Some (a, b), Some (c, d) ->
+      Some (a + c, b + d)
 
-let bot = None
+  let sub i1 i2 =
+    match i1, i2 with
+    | None, _ | _, None -> None
+    | Some (a, b), Some (c, d) -> Some (a - d, b - c)
 
-let const n = Some (n, n)
+  let add_inv i1 i2 i3 = (sub i3 i2, sub i3 i1)
 
-let to_string i =
-  match i with
-  | None -> "{}"
-  | Some (a, b) ->
-    let str i =
-      if i = max_int then "+oo"
-      else if i = min_int then "-oo"
-      else string_of_int i
-    in
-    "[" ^ (str a) ^ ", " ^ (str b) ^ "]"
+  let sub_inv i1 i2 i3 = (add i3 i2, sub i1 i3)
+
+  let le_inv i1 i2 =
+    match i1, i2 with
+    | None, _ | _, None -> bot, bot
+    | Some (a, b), Some (a', b') ->
+      if a > b' then bot, bot
+      else Some (a, min b b'), Some (min a a', b')
+
+
+  let eq_inv i1 i2 =
+    match i1, i2 with
+    | None, _ | _, None -> bot, bot
+    | Some _, Some _ -> (meet i1 i2, meet i1 i2)
+
+
+  let to_string i =
+    match i with
+    | None -> "{}"
+    | Some (a, b) ->
+      let str i =
+        if i = max_int then "+oo"
+        else if i = min_int then "-oo"
+        else string_of_int i
+      in
+      "[" ^ (str a) ^ ", " ^ (str b) ^ "]"
 
 end
 
-(** {2 postfixpoint algorithm } *)
-
-module Pfp (D : sig
-  type t
-  val top : t
-  val bot : t
-  val incl : t -> t ->bool
-end) : sig
-  val set_max_iter : int -> unit
-  val compute : (D.t -> D.t) -> D.t
-end = struct
-  let max_iter = ref 10
-
-  let set_max_iter i = max_iter := i
-  
-  let rec iter i (f : D.t -> D.t) x =
-    if i = 0 then D.top
-    else
-      let x' = f x in
-      if D.incl x' x then x'
-      else iter (i - 1) f (f x)
-  
-  let compute f =
-    iter !max_iter f D.bot
-end
 
 (** {2 Analyzer } *)
-
-module Analyzer (ST : StoreDom) = struct
-  module D = ST.D
-  module P = Pfp(ST)
-  open Imp
+module Analyzer (D : IntDom) = struct
+  module ST = MemoryDom(D)
+  module P = Fix.Pfp(ST)
 
   let rec eval (s : ST.t) (e : expr) =
     match e with
@@ -209,21 +119,21 @@ module Analyzer (ST : StoreDom) = struct
     | Cst n -> if D.is_in n res then s else ST.bot
     | Var v -> ST.set s v (D.meet res (ST.get s v))
     | Add (x, y) ->
-      let dx = eval s x in
-      let dy = eval s y in
-      let resx = D.meet dx (D.sub res dy) in
-      let resy = D.meet dy (D.sub res dx) in
-      assume_eval (assume_eval s resy y) resx x
+      let dx, dy = D.add_inv (eval s x) (eval s y) res in
+      assume_eval (assume_eval s dy y) dx x
     | Sub (x, y) ->
-      let dx = eval s x in
-      let dy = eval s y in
-      let resx = D.meet dx (D.add dy res) in
-      let resy = D.meet dy (D.sub dx res) in
-      assume_eval (assume_eval s resy y) resx x
-    
+      let dx, dy = D.sub_inv (eval s x) (eval s y) res in
+      assume_eval (assume_eval s dy y) dx x
+
   let assume_test (s : ST.t) (b : bool) (c : cond) =
     match c with
     | Bool b' -> if b = b' then s else ST.bot
+    | Eq (x, y) when b ->
+      let (dx, dy) = D.eq_inv (eval s x) (eval s y) in
+      assume_eval (assume_eval s dy y) dx x
+    | Le (x, y) when b ->
+      let (dx, dy) = D.le_inv (eval s x) (eval s y) in
+      assume_eval (assume_eval s dy y) dx x
     | _ -> s
 
   let rec run (s : ST.t) (p : prog) =
@@ -237,13 +147,11 @@ module Analyzer (ST : StoreDom) = struct
 end
 
 let test = [
-  Imp.If (Bool true, 
-    [Assign ("x", Cst 1); Assign ("y", Cst 10)],
-    [Assign ("x", Cst 3)]);
-  Assign ("z", Add (Var "x", Var "y"));
+  If (Le (Var "x", Cst 10), 
+          [If (Eq (Var "x", Cst 11), [Assign ("z", Cst 1)], [Assign ("z", Cst 2)])],
+          [Assign ("z", Cst 3)]);
 ]
 
-module ST = AStore(IntInterval)
-module A = Analyzer(ST)
+module A = Analyzer(IntInterval)
 
-let () = A.run ST.top test |> ST.print
+let () = A.run A.ST.top test |> A.ST.print

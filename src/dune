@@ -1,2 +1,8 @@
+(library
+ (name flow_lib)
+ (modules :standard \ flow))
+
 (executable
- (name flow))
+ (name flow)
+ (modules flow)
+ (libraries flow_lib))
